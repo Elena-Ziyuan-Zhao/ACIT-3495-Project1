@@ -1,4 +1,25 @@
 services:
+  post:
+    build: ./post
+    ports:
+      - "8080:8080"
+    environment:
+      MYSQL_HOST: mysql-db
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: commute_db
+      DEV_USERNAME: demo
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+    networks: [frontend-net, backend-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
   mysql-db:
     image: mysql:8.0
     restart: unless-stopped
@@ -22,8 +43,9 @@ services:
         limits: { cpus: "1.0", memory: 1g }
 
 networks:
+  frontend-net:
   backend-net:
     internal: true
-
+  
 volumes:
   mysql-data:
