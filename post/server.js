@@ -6,7 +6,7 @@ app.use(express.urlencoded({ extended: false }));
 
 const PORT = process.env.PORT || 8080;
 
-
+// 连接池：mysql2 会在每次查询时自动拿/重建连接，MySQL 挂掉再回来也能自动恢复
 const pool = mysql.createPool({
   host: process.env.MYSQL_HOST || 'mysql-db',
   user: process.env.MYSQL_USER,
@@ -16,17 +16,47 @@ const pool = mysql.createPool({
   connectionLimit: 10,
 });
 
-
+// 结构化日志（JSON），不打印密码
 function log(level, msg, extra = {}) {
   console.log(JSON.stringify({ time: new Date().toISOString(), level, service: 'post', msg, ...extra }));
 }
 
+const AUTH_URL = process.env.AUTH_URL || 'http://auth-service:3000';
+const COOKIE_NAME = 'token';
 
-function requireAuth(req, res, next) {
-  req.user = { username: process.env.DEV_USERNAME || 'demo' };
-  next();
+function getCookie(req, name) {
+  const raw = req.headers.cookie || '';
+  for (const part of raw.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(v.join('='));
+  }
+  return null;
 }
-// =====================================================
+
+// 每个受保护的请求都去问 auth-service：这个 token 有效吗？
+async function requireAuth(req, res, next) {
+  const token = getCookie(req, COOKIE_NAME);
+  if (!token) return res.redirect('/login');
+
+  try {
+    const r = await fetch(`${AUTH_URL}/verify`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (r.status === 401) {
+      res.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+      return res.redirect('/login');
+    }
+    if (!r.ok) throw new Error(`auth responded ${r.status}`);
+    const data = await r.json();
+    req.user = { username: data.user.username };
+    next();
+  } catch (err) {
+    log('error', 'auth service unreachable', { message: err.message });
+    res.status(503).send(page(
+      `<div class="alert alert-warning">Authentication service is temporarily unavailable. Please try again shortly.</div>`));
+  }
+}
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -70,7 +100,10 @@ async function renderForm(req, res, { status = 200, error = '', success = '' } =
        <td>${new Date(r.created_at).toLocaleString()}</td></tr>`).join('');
 
     res.status(status).send(page(`
-<p class="text-muted">Logged in as <strong>${esc(req.user.username)}</strong></p>
+<form method="POST" action="/logout" class="d-flex justify-content-between align-items-center mb-3">
+  <span class="text-muted">Logged in as <strong>${esc(req.user.username)}</strong></span>
+  <button class="btn btn-sm btn-outline-secondary">Log out</button>
+</form>
 ${error ? `<div class="alert alert-danger">${esc(error)}</div>` : ''}
 ${success ? `<div class="alert alert-success">${esc(success)}</div>` : ''}
 <form method="POST" action="/entries" class="card card-body mb-4">
@@ -92,6 +125,55 @@ ${success ? `<div class="alert alert-success">${esc(success)}</div>` : ''}
       `<div class="alert alert-warning">Database is temporarily unavailable. Please try again in a moment.</div>`));
   }
 }
+
+function loginPage(error = '') {
+  return page(`
+${error ? `<div class="alert alert-danger">${esc(error)}</div>` : ''}
+<form method="POST" action="/login" class="card card-body">
+  <div class="mb-3">
+    <label class="form-label">Username</label>
+    <input name="username" class="form-control" required autocomplete="username">
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Password</label>
+    <input name="password" type="password" class="form-control" required autocomplete="current-password">
+  </div>
+  <button class="btn btn-primary">Log in</button>
+</form>`);
+}
+
+app.get('/login', (req, res) => res.send(loginPage()));
+
+app.post('/login', async (req, res) => {
+  const username = String(req.body.username || '');
+  const password = String(req.body.password || '');
+  try {
+    const r = await fetch(`${AUTH_URL}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (r.status === 400 || r.status === 401) {
+      log('warn', 'login rejected', { username });
+      return res.status(401).send(loginPage('Invalid username or password.'));
+    }
+    if (!r.ok) throw new Error(`auth responded ${r.status}`);
+    const { token, expires_in } = await r.json();
+    res.setHeader('Set-Cookie',
+      `${COOKIE_NAME}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${expires_in || 3600}`);
+    log('info', 'login succeeded', { username });
+    res.redirect('/');
+  } catch (err) {
+    log('error', 'login failed: auth service unavailable', { message: err.message });
+    res.status(503).send(loginPage('Authentication service is unavailable. Please try again shortly.'));
+  }
+});
+
+app.post('/logout', (req, res) => {
+  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+  res.redirect('/login');
+});
 
 app.get('/', requireAuth, (req, res) => {
   renderForm(req, res, { success: req.query.ok ? 'Commute saved.' : '' });
@@ -124,6 +206,9 @@ app.post('/entries', requireAuth, async (req, res) => {
     res.redirect('/?ok=1');
   } catch (err) {
     log('error', 'failed to save commute', { code: err.code });
+    if (err.code === 'ER_NO_REFERENCED_ROW_2') {
+      return renderForm(req, res, { status: 400, error: 'Unknown user or route.' });
+    }
     res.status(503).send(page(
       `<div class="alert alert-warning">Could not save right now — the database is unavailable. Please try again shortly.</div>
        <a href="/" class="btn btn-secondary">Back</a>`));
@@ -132,7 +217,7 @@ app.post('/entries', requireAuth, async (req, res) => {
 
 const server = app.listen(PORT, () => log('info', `enter-data app listening on ${PORT}`));
 
-
+// docker stop 时优雅退出
 process.on('SIGTERM', () => {
   log('info', 'SIGTERM received, shutting down');
   server.close(() => pool.end().then(() => process.exit(0)));
