@@ -92,7 +92,27 @@ services:
       resources:
         limits: { cpus: "0.5", memory: 256m }
 
-  # ===== show-results-app (owner: ___) =====
+  # ===== show-results-app (owner: Lincoln) =====
+  show-results-app:
+    build: ./get
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      MONGO_URI: ${MONGO_URI}
+      AUTH_URL: http://auth-service:3000
+      CACHE_TTL_MS: ${CACHE_TTL_MS:-0}
+    depends_on:
+      mongo-db:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    networks: [frontend-net, backend-net]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128m }
 
   # ===== analytics-service (owner: Taranjot Singh) =====
 

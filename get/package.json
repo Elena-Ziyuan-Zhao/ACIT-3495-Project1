@@ -1,0 +1,17 @@
+{
+  "name": "show-results-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Show Results web app for the Commute & Traffic Time Logger project.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "mongodb": "^6.10.0"
+  }
+}
