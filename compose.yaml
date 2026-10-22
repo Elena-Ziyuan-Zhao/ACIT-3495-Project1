@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-commute_db}
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
@@ -70,6 +70,7 @@ services:
   # ===== enter-data-app (owner: Elena) =====
   post:
     build: ./post
+    restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
@@ -77,12 +78,15 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_DATABASE: commute_db
-      DEV_USERNAME: demo
+      AUTH_URL: http://auth-service:3000
     depends_on:
       mysql-db:
         condition: service_healthy
+      auth-service:
+        condition: service_healthy
     networks: [frontend-net, backend-net]
-    restart: unless-stopped
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -115,26 +119,32 @@ services:
         limits: { cpus: "0.5", memory: 128m }
 
   # ===== analytics-service (owner: Taranjot Singh) =====
-
   analytics:
-    build:
-      context: ./analytics
+    build: ./analytics
     container_name: analytics-service
+    restart: unless-stopped
     environment:
-      - MYSQL_USER=${MYSQL_USER}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
-      - MYSQL_DATABASE=${MYSQL_DATABASE}
-      - MYSQL_HOST=mysql-db
-      - MONGO_URI=mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongo-db:27017/
-    networks:
-      - backend-net
+      MYSQL_HOST: mysql-db
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: commute_db
+      MONGO_URI: ${MONGO_URI}
+      POLL_SECONDS: 15
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+      mongo-db:
+        condition: service_healthy
+    networks: [backend-net]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
     deploy:
       resources:
-        limits:
-          cpus: '0.50'
-          memory: 256M
+        limits: { cpus: "0.5", memory: 256m }
+
 networks:
-  frontend-net:      # web apps + auth-service; web apps publish 8080/8081
+  frontend-net:      # web apps only; they publish 8080/8081 to the host
     driver: bridge
   backend-net:       # web apps + auth + analytics + databases; no internet, no host ports
     internal: true
