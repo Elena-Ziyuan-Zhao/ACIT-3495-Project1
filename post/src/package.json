@@ -1,0 +1,16 @@
+{
+  "name": "post-enter-data",
+  "version": "1.0.0",
+  "description": "Enter Data web app for the Commute & Traffic Time Logger",
+  "main": "src/server.js",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "mysql2": "^3.11.0"
+  }
+}
