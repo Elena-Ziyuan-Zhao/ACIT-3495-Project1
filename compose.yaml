@@ -46,7 +46,26 @@ services:
       resources:
         limits: { cpus: "0.5", memory: 512m }
 
-  # ===== auth-service (owner: ___) =====
+  # ===== auth-service (owner: Chenyue) =====
+  auth-service:
+    build: ./auth
+    restart: unless-stopped
+    environment:
+      DB_HOST: mysql-db
+      DB_USER: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_SEED_USERNAME: ${AUTH_SEED_USERNAME}
+      AUTH_SEED_PASSWORD: ${AUTH_SEED_PASSWORD}
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+    networks: [backend-net]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128m }
 
   # ===== enter-data-app (owner: Elena) =====
   post:
