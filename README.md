@@ -45,7 +45,7 @@ flowchart LR
 | `post` (enter-data app) | `post/` | Node.js / Express | **8080** | Form to log a commute; writes to MySQL `commute_logs` |
 | `show-results-app` | `get/` | Node.js / Express | **8081** | Shows per-route statistics from MongoDB |
 | `auth-service` | `auth/` | Node.js / Express | none | `POST /login`, `GET /verify` (JWT); users in MySQL |
-| `analytics` | `analytics/` | Python | none | Every 15 s reads MySQL, writes stats to MongoDB |
+| `analytics` (container `analytics-service`) | `analytics/` | Python | none | Every 15 s reads MySQL, writes stats to MongoDB |
 | `mysql-db` | `mysql/` | MySQL 8.0 | none | `commute_db`: `users`, `routes`, `commute_logs` |
 | `mongo-db` | `mongo/` | MongoDB 7.0 | none | `analytics_db.route_stats` |
 
@@ -105,8 +105,7 @@ The first build downloads base images and takes a few minutes.
 docker compose ps
 ```
 
-Wait until `mysql-db`, `mongo-db`, `auth-service`, `post` and `show-results-app` show
-`(healthy)` (about 30–60 seconds on first start).
+Wait until every service shows `(healthy)` (about 30–60 seconds on first start).
 
 ### 5. Use the apps
 
@@ -185,15 +184,9 @@ docker run --rm -v "$PWD/get:/app"  -w /app node:24-alpine sh -c "npm ci && npm 
 | Show Results says "No statistics yet" | No commutes logged yet, or analytics is not running: `docker compose logs analytics` |
 | A container keeps restarting | `docker compose logs <service>` shows the reason |
 
-## Known issues (work in progress)
-
-Remove each item when it is fixed.
-
-- Enter Data (`post`) still uses a development login (every user is `demo`) instead of `auth-service`.
-- `analytics`: `MYSQL_DATABASE` and `MONGO_URI` in `compose.yaml` need to point at `commute_db` and the
-  app-user `MONGO_URI` from `.env`, and `last_updated` must be written as a date, otherwise MongoDB rejects the stats.
-
 ## Service documentation
 
 - [auth/README.md](auth/README.md): auth-service endpoints, environment variables, security choices
 - [get/README.md](get/README.md): show-results-app endpoints, environment variables, security choices
+- [post/README.md](post/README.md): enter-data app
+- [analytics/README.md](analytics/README.md): analytics-service, document format, reliability

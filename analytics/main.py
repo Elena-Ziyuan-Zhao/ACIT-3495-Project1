@@ -1,84 +1,136 @@
+"""analytics-service
+
+Every POLL_SECONDS: aggregate commute_logs per route in MySQL (min, max, avg,
+count) and upsert one document per route into MongoDB analytics_db.route_stats.
+A heartbeat file is touched after every successful run; the Docker healthcheck
+uses it, so the container reports unhealthy if either database is unreachable.
+"""
+import json
 import os
+import signal
+import sys
 import time
+from datetime import datetime, timezone
+from pathlib import Path
+
 import mysql.connector
-from pymongo import MongoClient
+from pymongo import MongoClient, UpdateOne
+from pymongo.errors import PyMongoError
 
-# Fetch database credentials from environment variables
-MYSQL_USER = os.getenv('MYSQL_USER')
-MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD')
-MYSQL_DATABASE = os.getenv('MYSQL_DATABASE')
-MYSQL_HOST = os.getenv('MYSQL_HOST', 'mysql-db')
-MONGO_URI = os.getenv('MONGO_URI')
+MYSQL_CONFIG = {
+    "host": os.getenv("MYSQL_HOST", "mysql-db"),
+    "user": os.getenv("MYSQL_USER"),
+    "password": os.getenv("MYSQL_PASSWORD"),
+    "database": os.getenv("MYSQL_DATABASE", "commute_db"),
+    "connection_timeout": 5,
+}
+MONGO_URI = os.getenv("MONGO_URI")  # must include /analytics_db and authSource
+POLL_SECONDS = int(os.getenv("POLL_SECONDS", "15"))
+HEARTBEAT_FILE = Path(os.getenv("HEARTBEAT_FILE", "/tmp/heartbeat"))
 
-def calculate_and_store_analytics():
+QUERY = """
+    SELECT
+        CONCAT(r.origin, ' to ', r.destination) AS route_name,
+        MIN(c.duration_minutes)                 AS min_duration,
+        MAX(c.duration_minutes)                 AS max_duration,
+        AVG(c.duration_minutes)                 AS avg_duration,
+        COUNT(c.id)                             AS total_trips
+    FROM commute_logs c
+    JOIN routes r ON c.route_id = r.id
+    GROUP BY r.id, r.origin, r.destination
+"""
+
+
+def log(level, msg, **fields):
+    """One JSON object per line on stdout. Never log passwords or URIs."""
+    entry = {"ts": datetime.now(timezone.utc).isoformat(), "level": level,
+             "service": "analytics-service", "msg": msg, **fields}
+    print(json.dumps(entry), flush=True)
+
+
+def fetch_stats():
+    """Run the aggregation in MySQL. A fresh connection per run recovers on its own after a MySQL restart."""
+    conn = mysql.connector.connect(**MYSQL_CONFIG)
     try:
-        # 1. Connect to MySQL Database
-        mysql_conn = mysql.connector.connect(
-            host=MYSQL_HOST,
-            user=MYSQL_USER,
-            password=MYSQL_PASSWORD,
-            database=MYSQL_DATABASE
-        )
-        cursor = mysql_conn.cursor(dictionary=True)
-
-        # 2. Query MySQL to aggregate commute statistics
-        query = """
-            SELECT 
-                CONCAT(r.origin, ' to ', r.destination) as route_name, 
-                MIN(c.duration_minutes) as min_duration, 
-                MAX(c.duration_minutes) as max_duration, 
-                AVG(c.duration_minutes) as avg_duration, 
-                COUNT(c.id) as total_trips
-            FROM commute_logs c
-            JOIN routes r ON c.route_id = r.id
-            GROUP BY c.route_id, route_name
-        """
-        cursor.execute(query)
-        results = cursor.fetchall()
-
-        # 3. Connect to MongoDB
-        mongo_client = MongoClient(MONGO_URI)
-        mongo_db = mongo_client['analytics_db']
-        collection = mongo_db['route_stats']
-
-        # 4. Upsert results into MongoDB
-        for row in results:
-            route_name = row['route_name']
-            
-            # Format the document based on our agreed schema
-            stats_document = {
-                "route_name": route_name,
-                "min_duration": row['min_duration'],
-                "max_duration": row['max_duration'],
-                "avg_duration": float(row['avg_duration']), 
-                "total_trips": row['total_trips'],
-                "last_updated": time.strftime('%Y-%m-%dT%H:%M:%SZ')
-            }
-            
-            # Upsert ensures we update existing routes or create new ones
-            collection.update_one(
-                {"route_name": route_name},
-                {"$set": stats_document},
-                upsert=True
-            )
-            print(f"Updated stats for route: {route_name}")
-
-    except mysql.connector.Error as err:
-        print(f"MySQL Error: {err}")
-    except Exception as e:
-        print(f"Error processing analytics: {e}")
-    finally:
-        # Ensure connections are closed properly
-        if 'cursor' in locals() and cursor is not None:
+        cursor = conn.cursor(dictionary=True)
+        try:
+            cursor.execute(QUERY)
+            return cursor.fetchall()
+        finally:
             cursor.close()
-        if 'mysql_conn' in locals() and mysql_conn.is_connected():
-            mysql_conn.close()
+    finally:
+        conn.close()
+
+
+def to_document(row, now):
+    """Convert one MySQL row to the agreed route_stats shape.
+
+    MySQL returns AVG() as Decimal, which BSON cannot store, so it becomes a float.
+    last_updated must be a real date: the collection's validator rejects strings.
+    """
+    return {
+        "route_name": row["route_name"],
+        "min_duration": int(row["min_duration"]),
+        "max_duration": int(row["max_duration"]),
+        "avg_duration": round(float(row["avg_duration"]), 2),
+        "total_trips": int(row["total_trips"]),
+        "last_updated": now,
+    }
+
+
+def run_once(collection):
+    rows = fetch_stats()
+    now = datetime.now(timezone.utc)
+    ops = [
+        UpdateOne({"route_name": doc["route_name"]}, {"$set": doc}, upsert=True)
+        for doc in (to_document(row, now) for row in rows)
+    ]
+    if ops:
+        collection.bulk_write(ops, ordered=False)
+    return len(ops)
+
+
+def main():
+    if not MONGO_URI:
+        log("error", "MONGO_URI is required")
+        sys.exit(1)
+
+    # One client for the whole process; it pools connections and reconnects by itself.
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    collection = client.get_default_database()["route_stats"]  # database name comes from the URI
+
+    stopping = False
+
+    def stop(signum, _frame):
+        nonlocal stopping
+        stopping = True
+        log("info", "shutting down", signal=signal.Signals(signum).name)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+
+    log("info", "analytics service started", poll_seconds=POLL_SECONDS)
+    while not stopping:
+        started = time.monotonic()
+        try:
+            count = run_once(collection)
+            HEARTBEAT_FILE.touch()
+            log("info", "route stats updated", routes=count,
+                duration_ms=round((time.monotonic() - started) * 1000, 1))
+        except mysql.connector.Error as err:
+            log("error", "MySQL unavailable, will retry", message=str(err))
+        except PyMongoError as err:
+            log("error", "MongoDB unavailable, will retry", message=str(err))
+        except Exception as err:  # keep the worker alive; the next run may succeed
+            log("error", "analytics run failed", message=str(err))
+
+        # Sleep in short steps so `docker stop` is handled quickly.
+        deadline = time.monotonic() + POLL_SECONDS
+        while not stopping and time.monotonic() < deadline:
+            time.sleep(0.5)
+
+    client.close()
+
 
 if __name__ == "__main__":
-    print("Analytics service started. Waiting for databases to initialize...")
-    time.sleep(10) # Brief pause on startup to allow MySQL/Mongo to become fully ready
-    
-    print("Beginning polling loop...")
-    while True:
-        calculate_and_store_analytics()
-        time.sleep(15) # Poll every 15 seconds
+    main()
