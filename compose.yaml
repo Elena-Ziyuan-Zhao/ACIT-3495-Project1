@@ -1,4 +1,5 @@
 services:
+  # ===== mysql-db (owner: ___) =====
   mysql-db:
     image: mysql:8.0
     restart: unless-stopped
@@ -20,6 +21,39 @@ services:
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 1g }
+
+  # ===== mongo-db (owner: Lincoln) =====
+  mongo-db:
+    build: ./mongo
+    restart: unless-stopped
+    command: ["--wiredTigerCacheSizeGB", "0.25"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: analytics_db
+      MONGO_APP_USER: ${MONGO_APP_USER}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD}
+    volumes:
+      - mongo-data:/data/db
+    networks: [backend-net]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512m }
+
+  # ===== auth-service (owner: ___) =====
+
+  # ===== enter-data-app (owner: ___) =====
+
+  # ===== show-results-app (owner: ___) =====
+
+  # ===== analytics-service (owner: ___) =====
+
   analytics:
     build:
       context: ./analytics
@@ -38,8 +72,11 @@ services:
           cpus: '0.50'
           memory: 256M
 networks:
-  backend-net:
+  frontend-net:      # web apps + auth-service; web apps publish 8080/8081
+    driver: bridge
+  backend-net:       # web apps + auth + analytics + databases; no internet, no host ports
     internal: true
 
 volumes:
   mysql-data:
+  mongo-data:
