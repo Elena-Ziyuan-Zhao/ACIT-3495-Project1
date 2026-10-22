@@ -52,7 +52,7 @@ services:
 
   # ===== show-results-app (owner: ___) =====
 
-  # ===== analytics-service (owner: ___) =====
+  # ===== analytics-service (owner: Taranjot Singh) =====
 
   analytics:
     build:
