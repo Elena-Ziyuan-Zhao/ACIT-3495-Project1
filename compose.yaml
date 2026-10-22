@@ -20,7 +20,23 @@ services:
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 1g }
-
+  analytics:
+    build:
+      context: ./analytics
+    container_name: analytics-service
+    environment:
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_HOST=mysql-db
+      - MONGO_URI=mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongo-db:27017/
+    networks:
+      - backend-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
 networks:
   backend-net:
     internal: true
