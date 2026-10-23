@@ -86,12 +86,41 @@ databases cannot make outbound internet connections.
 
 ![Non-root containers](evidence/03-read_only.png)
 
-### 3.4 Access control
+### 3.4 Access control: JWT + httpOnly cookie
+
+The web apps never check passwords themselves. Only `auth-service` reads the `users` table,
+and it has no host port.
+
+```
+Browser --POST /login--> web app --POST /login--> auth-service --> MySQL users (bcrypt hash)
+Browser <--Set-Cookie--- web app <--{token}------ auth-service      (JWT, 1 hour)
+
+Browser --GET / + cookie--> web app --GET /verify (Bearer token)--> auth-service
+                            200 {user}: show the page
+                            401: clear the cookie, redirect to /login
+```
 
 1. Passwords are stored as bcrypt hashes. An unknown username is checked against a dummy hash,
-   so response time does not reveal whether the user exists.
+   so response time does not reveal whether the user exists. A wrong username and a wrong
+   password show the same message: "Invalid username or password."
 2. On login, `auth-service` returns a signed JWT (HS256, issuer-checked, 1-hour expiry).
-3. An invalid or expired token clears the cookie and redirects to `/login`.
+   Only `auth-service` has `JWT_SECRET`, so the web apps cannot create or change a token.
+3. The web app stores the token in an httpOnly cookie (flags below).
+4. Every protected page reads the cookie and calls `/verify`. An invalid or expired token clears
+   the cookie and redirects to `/login`. Logout also clears the cookie.
+5. If `auth-service` is down, the request is refused (503), so the system fails closed (see 5.2).
+
+| Cookie flag | post (:8080) | show-results-app (:8081) | Why |
+|---|---|---|---|
+| `HttpOnly` | yes | yes | JavaScript on the page cannot read the token, so an XSS bug cannot steal it |
+| `SameSite` | `Strict` | `Lax` | Strict: never sent from other sites. Lax: from other sites, only sent on a plain link click (GET). Protects against CSRF |
+| `Max-Age` | 3600 s | 3600 s | The cookie expires together with the token |
+| `Secure` | no | off by default (`COOKIE_SECURE`) | The apps run on plain HTTP on localhost; it should be turned on behind HTTPS |
+| Name | `token` | `sr_token` | Browsers share cookies across ports, so different names keep the two logins separate |
+
+**Trade-off:** `/verify` checks the signature and expiry without a database lookup, so token checks
+keep working while MySQL is down. The downside is that a token cannot be cancelled
+before it expires, which is why the expiry is kept short (1 hour).
 
 
 ![Access control](evidence/03-access-denied.png)
