@@ -59,22 +59,6 @@ only on the internal Docker network `backend-net`.
 - Git
 - Free host ports **8080** and **8081**
 
-## Quick start
-
-**TL;DR** (Windows PowerShell, first time):
-
-```powershell
-git clone https://github.com/Elena-Ziyuan-Zhao/ACIT-3495-Project1.git
-cd ACIT-3495-Project1
-Copy-Item .env.example .env      # then edit .env and replace every change_me
-docker compose up -d --build
-docker compose ps                # wait until every service is (healthy)
-```
-
-Then open http://localhost:8080 (Enter Data) and http://localhost:8081 (Show Results)
-and log in with `AUTH_SEED_USERNAME` / `AUTH_SEED_PASSWORD` from your `.env`.
-
-The steps below explain each part.
 
 ### 1. Clone the repository
 
@@ -84,18 +68,11 @@ cd ACIT-3495-Project1
 ```
 
 ### 2. Create your `.env`
+`.evn.exmple` is an example of what should have in your `.env` file
 
-Copy the template, then open `.env` and replace every `change_me` value.
-
-```powershell
-# Windows PowerShell
-Copy-Item .env.example .env
-```
-
-```sh
-# macOS / Linux
-cp .env.example .env
-```
+1. Copy the `.evn.exmple`
+2. rename it as `.env`
+3. replace every `change_me` value.
 
 Rules for the values:
 
@@ -106,7 +83,6 @@ Rules for the values:
 | `AUTH_SEED_USERNAME` / `AUTH_SEED_PASSWORD` | The demo login created on startup. Password at least 8 characters |
 | `MONGO_URI` | The password inside it must equal `MONGO_APP_PASSWORD`. Special characters must be URL-encoded (`@` becomes `%40`) |
 
-`.env` is in `.gitignore`. Never commit it.
 
 ### 3. Build and start everything
 
@@ -116,30 +92,7 @@ docker compose up -d --build
 
 The first build downloads base images and takes a few minutes.
 
-### 4. Check that everything is running
-
-```sh
-docker compose ps
-```
-
-Wait until every service shows `(healthy)` (about 30–60 seconds on first start).
-Startup order is automatic: the databases start first, then `auth-service` and `analytics`,
-then the two web apps. While a dependency is still starting, the web apps show `Created`;
-that is normal for the first minute.
-
-Healthy output looks like this (names shortened):
-
-```text
-SERVICE            STATUS                   PORTS
-mysql-db           Up (healthy)             3306/tcp
-mongo-db           Up (healthy)             27017/tcp
-auth-service       Up (healthy)             3000/tcp
-analytics          Up (healthy)
-post               Up (healthy)             0.0.0.0:8080->8080/tcp
-show-results-app   Up (healthy)             0.0.0.0:8081->8081/tcp
-```
-
-### 5. Use the apps
+### 4. Use the apps
 
 | App | URL | Login |
 | --- | --- | --- |
@@ -153,50 +106,10 @@ show-results-app   Up (healthy)             0.0.0.0:8081->8081/tcp
 ### 6. Shut down
 
 ```sh
-docker compose down        # stop everything, keep the data
-docker compose down -v     # stop everything and delete all data (fresh start next time)
+docker compose down        # -  stop everything, keep the data
+docker compose down -v     #  - stop everything and delete all data (fresh start next time)
 ```
 
-## Updating after a `git pull`
-
-When teammates change code or the database setup:
-
-```sh
-git pull
-# compare .env.example with your .env and add any new variables
-docker compose down -v           # only needed if init scripts, users or passwords changed
-docker compose up -d --build
-```
-
-## Everyday commands
-
-```sh
-docker compose ps                         # status and health of every container
-docker compose logs -f                    # follow all logs (JSON lines)
-docker compose logs -f show-results-app   # follow one service
-docker compose up -d --build <service>    # rebuild and restart one service after code changes
-docker compose restart <service>          # restart one service
-docker compose down                       # stop and remove containers (data is kept)
-docker compose down -v                    # stop and DELETE all data (fresh databases next start)
-```
-
-## Checking individual services
-
-The internal services have no host port, so check them from inside their containers:
-
-```sh
-# auth-service health
-docker compose exec auth-service wget -qO- http://127.0.0.1:3000/health
-
-# show-results-app health
-docker compose exec show-results-app wget -qO- http://127.0.0.1:8081/health
-
-# MySQL: list tables
-docker compose exec mysql-db sh -c 'mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" commute_db -e "SHOW TABLES;"'
-
-# MongoDB: list the computed statistics
-docker compose exec mongo-db sh -c 'mongosh --quiet -u "$MONGO_APP_USER" -p "$MONGO_APP_PASSWORD" --authenticationDatabase analytics_db analytics_db --eval "db.route_stats.find()"'
-```
 
 ## Running the tests
 
@@ -223,20 +136,6 @@ docker run --rm -v "$PWD/get:/app"  -w /app node:24-alpine sh -c "npm ci && npm 
   the volume is empty**. After changing them, or after changing database passwords in
   `.env`, run `docker compose down -v` and start again.
 
-## Troubleshooting
-
-| Symptom | Fix |
-| --- | --- |
-| Browser says **"localhost refused to connect"** | The web app is not running yet. Run `docker compose ps -a`: if `post` / `show-results-app` are stuck at `Created`, a dependency is unhealthy. Check `docker compose logs auth-service` (and the databases) |
-| `auth-service` logs **"Access denied for user 'commute_app' … to database 'commute_db'"** | MySQL was initialised with a different database name or password. Make sure `.env` has `MYSQL_DATABASE=commute_db`, then `docker compose down -v` and `docker compose up -d --build` |
-| `WARN … variable is not set. Defaulting to a blank string` | Your `.env` is missing a variable. Compare it with `.env.example` and add the missing line |
-| `error during connect` / `cannot find the file specified` (Windows) | Docker Desktop is not running. Start it and wait until it says it is running |
-| `no configuration file provided: not found` | Run the command from the repository root (the folder containing `compose.yaml`) |
-| `port is already allocated` | Something else uses 8080 or 8081. Stop it, or change the left side of the port mapping in `compose.yaml` |
-| Login says "Invalid username or password" | Check `AUTH_SEED_USERNAME` / `AUTH_SEED_PASSWORD` in `.env`. If the user was created with an old password, run `docker compose down -v` |
-| Database login errors after editing `.env` | The init scripts only run once. `docker compose down -v`, then `docker compose up -d --build` |
-| Show Results says "No statistics yet" | No commutes logged yet, or analytics is not running: `docker compose logs analytics` |
-| A container keeps restarting | `docker compose logs <service>` shows the reason |
 
 ## Service documentation
 

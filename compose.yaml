@@ -144,9 +144,9 @@ services:
         limits: { cpus: "0.5", memory: 256m }
 
 networks:
-  frontend-net:      # web apps only; they publish 8080/8081 to the host
+  frontend-net:      
     driver: bridge
-  backend-net:       # web apps + auth + analytics + databases; no internet, no host ports
+  backend-net:
     internal: true
 
 volumes:
