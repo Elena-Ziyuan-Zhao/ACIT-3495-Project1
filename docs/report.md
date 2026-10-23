@@ -56,6 +56,34 @@ Two languages are used: Node.js and Python.
 
 ## 2. Docker & Optimization
 
+### 2.1 Before / after (enter-data service `post`)
+
+Same code, built with `docker build --no-cache` both times.
+
+| | Before | After |
+| --- | --- | --- |
+| Base image | `node:20` (Debian) | `node:20-alpine` |
+| Build | single stage, `npm install` | multi-stage, `npm ci --omit=dev` |
+| User | root | non-root `node` |
+| **Image size** | **1.59 GB** | **205 MB (−87%)** |
+| **Build time** | **14.5 s** | **7.5 s (−48%)** |
+
+![Build time before](evidence/02-build-before.png)
+![Build time after](evidence/02-build-after.png)
+![Image size](evidence/02-image-size.png)
+
+### 2.2 Why it is smaller
+
+- **Multi-stage build:** stage 1 installs production dependencies only; stage 2 starts from a clean
+  image and copies in just `node_modules` and `src/`, so the npm cache and install leftovers never
+  reach the final image.
+- **Alpine base:** about 130 MB instead of about 1.1 GB for Debian; this is most of the saving.
+- **`.dockerignore` and layer order:** tests, README, `.env` and `node_modules` stay out of the build
+  context, and `package.json` is copied before the code so the dependency layer is reused when only
+  code changes.
+
+Resource limits for every service are listed and justified in 6.1.
+
 ## 3. Security
 
 ### 3.1 Secret handling
@@ -139,7 +167,30 @@ Result: 0 HIGH and 0 CRITICAL vulnerabilities.
 
 ### 4.1 Health checks
 
+Every service has a health check that tests whether it can actually do its job, not just whether
+the process is running.
+
+| Service | Health check | Healthy means | Interval |
+| --- | --- | --- | --- |
+| `mysql-db` | `mysqladmin ping` | MySQL accepts connections | 10 s |
+| `mongo-db` | `mongosh` `db.adminCommand('ping')` | MongoDB answers | 10 s |
+| `auth-service` | `GET /health` | The app runs **and** `SELECT 1` on MySQL works | 10 s |
+| `post` | `GET /health` | The app runs **and** `SELECT 1` on MySQL works | 15 s |
+| `show-results-app` | `GET /health` | The app runs **and** MongoDB answers a ping | 10 s |
+| `analytics` | Heartbeat file age | A run (read MySQL, write MongoDB) succeeded in the last 60 s | 15 s |
+
+How they are used:
+
+- **Start-up order:** `depends_on: condition: service_healthy` starts the databases first, then
+  `auth-service` and `analytics`, then the two web apps, so no service starts before what it needs.
+- **Visible failures:** when a dependency goes down, the services that need it turn `unhealthy` in
+  `docker compose ps` (see 5.1), which points straight to the cause.
+- **Recovery:** all services use `restart: unless-stopped`, and the apps reconnect on their own once
+  the dependency is back, so they return to `healthy` without a restart.
+
 ## 5. Failure test
+
+### 5.1 Failure test 1 — MySQL stops
 
 **What we did:** stopped MySQL while a user was logged in, tried to save a commute, then restarted MySQL.
 
@@ -173,13 +224,31 @@ Every page checks the token with auth-service. If the token cannot be checked, t
 
 ---
 
-### 5.3 Persistence
+### 5.3 Failure test 3 — analytics stops
 
-- MySQL data lives in the named volume `mysql-data`, MongoDB data in `mongo-data`.
-- `docker compose down` keeps the data; `docker compose down -v` deletes it.
-- The database init scripts (`mysql/init.sql`, `mongo/init/01-init.js`) run **only when
-  the volume is empty**. After changing them, or after changing database passwords in
-  `.env`, run `docker compose down -v` and start again.
+**What we did:** stopped the analytics worker, entered a commute, then restarted it.
+
+1. `docker compose stop analytics`, then saved a new commute on :8080: it saves normally, because the
+   enter-data app writes straight to MySQL.
+2. :8081 keeps showing the last calculated stats (Burnaby to BCIT: 2 trips).
+3. `docker compose start analytics`: within about 20 seconds it recalculates from all rows in MySQL
+   and the missed trips appear (Burnaby to BCIT: 4 trips). Nothing is lost.
+
+![Analytics down](evidence/05-analytics-down.png)
+![Analytics recovered](evidence/05-analytics-recovered.png)
+
+### 5.4 Persistence
+
+**What we did:** deleted both database containers and recreated them.
+
+1. Counted the saved commutes: 8 trips.
+2. `docker compose rm -sf mysql-db mongo-db` removed both containers; `docker compose up -d` created new ones.
+3. Counted again: still 8 trips.
+
+The data lives in the named volumes `mysql-data` and `mongo-data`, not inside the containers, so it
+survives container recreation. Only `docker compose down -v` deletes it.
+
+![Persistence](evidence/05-persistence.png)
 
 ## 6. Performance & Observability
 
