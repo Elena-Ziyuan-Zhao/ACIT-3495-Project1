@@ -7,7 +7,7 @@
 ### 1.1 Services
 
 | Service | Language / base image | Host port | Responsibility |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `post` | Node.js 20 · `node:20-alpine` | 8080 | Login, enter commute duration, write to MySQL |
 | `show-results-app` | Node.js · `node:24-alpine` | 8081 | Login, read statistics from MongoDB |
 | `auth-service` | Node.js | internal | Verify credentials (bcrypt), issue and verify JWTs |
@@ -17,11 +17,10 @@
 
 Two languages are used: Node.js and Python.
 
-
 ### 1.2 Networks
 
 | Network | Members | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `frontend-net` (bridge) | post, show-results-app | Lets the two web apps publish their host ports (8080, 8081). Nothing else is attached, so no other service is reachable from outside. |
 | `backend-net` (`internal: true`) | post, show-results-app, auth-service, analytics, mysql-db, mongo-db | All service-to-service traffic. Marked internal, so it has no route to the host or the internet. |
 
@@ -44,9 +43,10 @@ Two languages are used: Node.js and Python.
 ### 1.4 Workflow
 
 > Start from a clean state (`docker compose down -v && docker compose up -d --build`).
-> 1. `01-login.png` — http://localhost:8080 redirects to the login page
+>
+> 1. `01-login.png` — <http://localhost:8080> redirects to the login page
 > 2. `01-entry.png` — after logging in, the form with a saved trip in "Your recent trips"
-> 3. `01-results.png` — ~15 s later, http://localhost:8081 showing the statistics table
+> 3. `01-results.png` — ~15 s later, <http://localhost:8081> showing the statistics table
 
 ![Login page](evidence/01-login.png)
 ![Entering a commute](evidence/01-entry.png)
@@ -65,14 +65,12 @@ Two languages are used: Node.js and Python.
 - CI uses GitHub Actions Secrets / `GITHUB_TOKEN`; no credentials appear in the workflow file.
 - `auth-service` refuses to start if `JWT_SECRET` is shorter than 32 characters.
 
-
 ![Secret handling](evidence/03-secrets.png)
 
 ### 3.2 Private internal services
 
 Only the two web apps publish ports. `backend-net` is `internal: true`, so even the
 databases cannot make outbound internet connections.
-
 
 ![Only two ports published](evidence/03-ports.png)
 
@@ -91,7 +89,7 @@ databases cannot make outbound internet connections.
 The web apps never check passwords themselves. Only `auth-service` reads the `users` table,
 and it has no host port.
 
-```
+```text
 Browser --POST /login--> web app --POST /login--> auth-service --> MySQL users (bcrypt hash)
 Browser <--Set-Cookie--- web app <--{token}------ auth-service      (JWT, 1 hour)
 
@@ -111,7 +109,7 @@ Browser --GET / + cookie--> web app --GET /verify (Bearer token)--> auth-service
 5. If `auth-service` is down, the request is refused (503), so the system fails closed (see 5.2).
 
 | Cookie flag | post (:8080) | show-results-app (:8081) | Why |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `HttpOnly` | yes | yes | JavaScript on the page cannot read the token, so an XSS bug cannot steal it |
 | `SameSite` | `Strict` | `Lax` | Strict: never sent from other sites. Lax: from other sites, only sent on a plain link click (GET). Protects against CSRF |
 | `Max-Age` | 3600 s | 3600 s | The cookie expires together with the token |
@@ -121,7 +119,6 @@ Browser --GET / + cookie--> web app --GET /verify (Bearer token)--> auth-service
 **Trade-off:** `/verify` checks the signature and expiry without a database lookup, so token checks
 keep working while MySQL is down. The downside is that a token cannot be cancelled
 before it expires, which is why the expiry is kept short (1 hour).
-
 
 ![Access control](evidence/03-access-denied.png)
 
@@ -143,6 +140,7 @@ Result: 0 HIGH and 0 CRITICAL vulnerabilities.
 ### 4.1 Health checks
 
 ## 5. Failure test
+
 **What we did:** stopped MySQL while a user was logged in, tried to save a commute, then restarted MySQL.
 
 1. `docker compose stop mysql-db` — MySQL goes down.
@@ -183,8 +181,6 @@ Every page checks the token with auth-service. If the token cannot be checked, t
   the volume is empty**. After changing them, or after changing database passwords in
   `.env`, run `docker compose down -v` and start again.
 
-
 ## 6. Performance & Observability
 
 ## 7. CI/CD Evidence
-
