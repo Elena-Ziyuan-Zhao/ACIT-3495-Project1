@@ -15,7 +15,7 @@
 | `mysql-db` | `mysql:8.0` | internal | Users, routes, raw commute logs |
 | `mongo-db` | `mongo:7.0` | internal | Aggregated route statistics |
 
-Two languages are used: **Node.js** (three services) and **Python** (analytics).
+Two languages are used: Node.js and Python.
 
 
 ### 1.2 Networks
@@ -82,10 +82,6 @@ databases cannot make outbound internet connections.
 - Applications connect with dedicated database users (`commute_app`, `analytics_user`), not root.
 - Core services are running with read_only previledge
 
-> ```bash
-> for s in post show-results-app auth-service analytics; do echo -n "$s: "; docker compose exec $s whoami; done
-> ```
-
 ![Non-root containers](evidence/03-nonroot.png)
 
 ![Non-root containers](evidence/03-read_only.png)
@@ -102,9 +98,10 @@ databases cannot make outbound internet connections.
 
 ### 3.5 Vulnerability scan
 
+Tools used - Trivy
+
 **Image scanned:** `auth-service` — the most security-sensitive service, since it handles
 passwords and signs tokens.
-
 
 ![Trivy scan](evidence/03-trivy.png)
 
@@ -117,22 +114,39 @@ Result: 0 HIGH and 0 CRITICAL vulnerabilities.
 ### 4.1 Health checks
 
 ## 5. Failure test
+**What we did:** stopped MySQL while a user was logged in, tried to save a commute, then restarted MySQL.
 
-### 5.1 Failure test 1 — MySQL stops
+1. `docker compose stop mysql-db` — MySQL goes down.
+2. Submitting a commute on :8080 shows a friendly page: "The database is temporarily unavailable". The app does not crash.
+3. `docker compose logs post` shows a JSON error with `code: ENOTFOUND`. While MySQL is stopped, its hostname `mysql-db` disappears from Docker's internal DNS. The log contains no stack trace and no passwords.
+4. `docker compose ps` shows `post` as `unhealthy`, because its `/health` check also tests the database. `auth-service` turns `unhealthy` too, since it needs MySQL to look up users.
+5. `docker compose start mysql-db` — MySQL comes back.
+6. Within about 15 seconds both services return to `healthy`, and a new commute saves successfully
+
+`post` uses a MySQL connection pool. When a query fails, the pool drops the broken connection, and the next request opens a new one. Once MySQL is back, the app works again on its own.
+
+![MySQL down](evidence/05-mysql-down.png)
+![Logs](evidence/05-mysql-logs.png)
+![Recovered](evidence/05-mysql-recovered.png)
 
 ### 5.2 Failure test 2 — auth-service stops
 
-### 5.3 Failure test 3 (optional) — analytics stops
+**What we did:** stopped the authentication service while a user was logged in, then restarted it.
 
+1. `docker compose stop auth-service` — auth-service goes down.
+2. Refreshing :8080 shows "The authentication service is temporarily unavailable" (HTTP 503).
+3. `docker compose start auth-service` — auth-service comes back.
+4. Refreshing :8080 works again, and the user is still logged in.
+
+Every page checks the token with auth-service. If the token cannot be checked, the app refuses the request instead of letting the user in — the system fails closed. After the restart the existing token is still valid, because it is signed with the same `JWT_SECRET`, so users do not need to log in again.
+
+![Auth down](evidence/05-auth-down.png)
+
+![Auth recovered](evidence/05-auth-recovered.png)
 
 ---
 
-## 6. Performance & Observability
----
-
-## 7. Persistence
-
-## Data and persistence
+### 5.3 Persistence
 
 - MySQL data lives in the named volume `mysql-data`, MongoDB data in `mongo-data`.
 - `docker compose down` keeps the data; `docker compose down -v` deletes it.
@@ -140,6 +154,8 @@ Result: 0 HIGH and 0 CRITICAL vulnerabilities.
   the volume is empty**. After changing them, or after changing database passwords in
   `.env`, run `docker compose down -v` and start again.
 
-add a screenshot of evidence here
-## 8. CI/CD Evidence
+
+## 6. Performance & Observability
+
+## 7. CI/CD Evidence
 
