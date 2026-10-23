@@ -116,35 +116,30 @@ Result: 0 HIGH and 0 CRITICAL vulnerabilities.
 
 ### 4.1 Health checks
 
-| Service | Health check | Meaning of "healthy" |
-|---|---|---|
-| `mysql-db` | `mysqladmin ping` | Server accepts connections |
-| `mongo-db` | `mongosh --eval "db.adminCommand('ping')"` | Server accepts connections |
-| `auth-service`, `post`, `show-results-app` | `GET /health` | App is up **and** its database answers (`503` otherwise) |
-
-Startup order uses `depends_on: condition: service_healthy`. The apps also retry their database
-connections, so a slow database start does not crash them. All services use `restart: unless-stopped`.
-
-> 📸 **Evidence 4.1** — `04-healthy.png`
-> `docker compose ps` with every service showing `(healthy)`.
-
-![All services healthy](evidence/04-healthy.png)
-
 ## 5. Failure test
 
-### 4.2 Failure test 1 — MySQL stops
+### 5.1 Failure test 1 — MySQL stops
 
-### 4.3 Failure test 2 — auth-service stops
+### 5.2 Failure test 2 — auth-service stops
 
-### 4.4 Failure test 3 (optional) — analytics stops
+### 5.3 Failure test 3 (optional) — analytics stops
 
 
 ---
 
-## 5. Performance & Observability
+## 6. Performance & Observability
 ---
 
-## 6. Persistence
+## 7. Persistence
 
-## 7. CI/CD Evidence
+## Data and persistence
+
+- MySQL data lives in the named volume `mysql-data`, MongoDB data in `mongo-data`.
+- `docker compose down` keeps the data; `docker compose down -v` deletes it.
+- The database init scripts (`mysql/init.sql`, `mongo/init/01-init.js`) run **only when
+  the volume is empty**. After changing them, or after changing database passwords in
+  `.env`, run `docker compose down -v` and start again.
+
+add a screenshot of evidence here
+## 8. CI/CD Evidence
 

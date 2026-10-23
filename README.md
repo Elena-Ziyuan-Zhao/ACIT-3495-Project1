@@ -128,13 +128,6 @@ docker run --rm -v "$PWD/auth:/app" -w /app node:24-alpine sh -c "npm ci && npm 
 docker run --rm -v "$PWD/get:/app"  -w /app node:24-alpine sh -c "npm ci && npm test"
 ```
 
-## Data and persistence
-
-- MySQL data lives in the named volume `mysql-data`, MongoDB data in `mongo-data`.
-- `docker compose down` keeps the data; `docker compose down -v` deletes it.
-- The database init scripts (`mysql/init.sql`, `mongo/init/01-init.js`) run **only when
-  the volume is empty**. After changing them, or after changing database passwords in
-  `.env`, run `docker compose down -v` and start again.
 
 
 ## Service documentation
