@@ -213,28 +213,40 @@ Resource limits are defined in `compose.yaml` to prevent container "noisy neighb
 2. **Improvement 2: CPU Limit Optimization (`0.5 CPU` → `1.0 CPU` on `show-results-app` and `auth-service`)**
    - *Baseline:* Containers throttled at `cpus: "0.5"`.
    - *Justification:* Under high concurrency (20 simultaneous connections), Node.js event-loop scheduling and JSON serialization were throttled by Linux Completely Fair Scheduler (CFS) quotas.
-   - *Result:* Raising the CPU limit to `1.0` eliminated CPU quota throttling spikes, reducing $p95$ tail latency by more than 62% and doubling throughput.
+   - *Result:* Raising the CPU limit to `1.0` eliminated CPU quota throttling spikes, reducing $p95$ tail latency by 62.5% and increasing throughput by +242.4%.
 
 ### 6.4 Results & Comparison
 
-| Test Configuration | Total Time (s) | Throughput (req/s) | Avg Latency (ms) | p95 Latency (ms) | Errors | Status Codes |
-| --- | --- | --- | --- | --- | --- |
-| **1. Baseline** (No Cache, 0.5 CPU) | 4.75 s | **105.33 req/s** | 188.26 ms | 369 ms | 0 (0.0%) | 200: 500 |
-| **2. Improvement 1** (5s In-Memory Cache) | 3.92 s | **127.65 req/s** | 154.96 ms | 514 ms | 0 (0.0%) | 200: 500 |
-| **3. Improvement 2** (5s Cache + 1.0 CPU) | 1.92 s | **260.01 req/s** | **76.02 ms** | **193 ms** | 0 (0.0%) | 200: 500 |
+| Test Configuration | Total Time (s) | Throughput (req/s) | Throughput Gain | Avg Latency (ms) | Latency Reduction | p95 Latency (ms) | Errors | Status Codes |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1. Baseline** (No Cache, 0.5 CPU) | 6.22 s | **80.37 req/s** | *Baseline* | 245.49 ms | *Baseline* | 501 ms | 0 (0.0%) | 200: 500 |
+| **2. Improvement 1** (5s In-Memory Cache) | 4.12 s | **121.30 req/s** | **+50.9%** | 163.91 ms | **-33.2%** | 299 ms | 0 (0.0%) | 200: 500 |
+| **3. Improvement 2** (5s Cache + 1.0 CPU) | 1.82 s | **275.18 req/s** | **+242.4%** | **71.59 ms** | **-70.8%** | **188 ms** | 0 (0.0%) | 200: 500 |
 
-*Summary: Combining in-memory caching with appropriate CPU allocation increased system throughput by **+146.8%** (from 105 to 260 req/s) and reduced average response latency by **59.6%** (from 188 ms down to 76 ms).*
+*Summary: Combining in-memory caching with appropriate CPU allocation increased system throughput by **+242.4%** (from 80.37 to 275.18 req/s) and reduced average response latency by **70.8%** (from 245.49 ms down to 71.59 ms) with zero failed requests.*
 
 ![docker stats during load test](evidence/06-docker-stats.png)
-![load test comparison](evidence/06-loadtest-results.png)
+
+#### Load Test Evidence by Run
+
+**Run 1: Baseline (No Cache, 0.5 CPU)**
+![Run 1 - Baseline load test](evidence/06-loadtest-results-1.png)
+
+**Run 2: Improvement 1 (5s In-Memory Cache, 0.5 CPU)**
+![Run 2 - Improvement 1 with cache](evidence/06-loadtest-results-2.png)
+
+**Run 3: Improvement 2 (5s In-Memory Cache + 1.0 CPU)**
+![Run 3 - Improvement 2 with cache and 1.0 CPU](evidence/06-loadtest-results-3.png)
 
 ### 6.5 Observability & Structured Logging
 
 All services emit structured JSON logs to `stdout` with millisecond request timing:
+
 - Request latencies are captured at the middleware level (`process.hrtime.bigint()`).
 - Secrets (passwords, JWT secrets, database connection strings) are sanitized and never logged.
 
 Example structured log entry from `show-results-app`:
+
 ```json
 {"ts":"2026-10-23T14:16:53.635Z","level":"info","service":"show-results-app","msg":"request","method":"GET","path":"/api/stats","status":200,"duration_ms":12.5}
 ```
