@@ -183,4 +183,62 @@ Every page checks the token with auth-service. If the token cannot be checked, t
 
 ## 6. Performance & Observability
 
+### 6.1 Resource Limits & Justification
+
+Resource limits are defined in `compose.yaml` to prevent container "noisy neighbour" issues, guard against memory leaks, and protect the host from resource exhaustion:
+
+| Service | CPU Limit | Memory Limit | Justification |
+| --- | --- | --- | --- |
+| `mysql-db` | `1.0` | `1024m` | Relational database; requires sufficient memory for InnoDB buffer pool, index caching, and connection management. |
+| `mongo-db` | `0.5` | `512m` | Document store for route statistics; capped with `--wiredTigerCacheSizeGB 0.25` (256 MB cache) to keep memory footprint predictable. |
+| `auth-service` | `1.0` | `256m` | Handles bcrypt password hashing (computationally intensive) and high-concurrency JWT signature verification. |
+| `post` | `0.5` | `256m` | Node.js web application; manages user input validation, HTML rendering, and MySQL connection pooling (up to 10 connections). |
+| `show-results-app` | `1.0` | `256m` | Node.js frontend; serves authenticated API/dashboard queries and maintains in-memory statistics cache. |
+| `analytics` | `0.5` | `256m` | Python background worker; lightweight periodic aggregator sleeping 15 seconds between runs. |
+
+### 6.2 Load Testing Methodology
+
+- **Tool:** Custom Node.js load test runner (`scripts/load-test.js`) executed inside the container network.
+- **Workload:** 500 HTTP requests with a concurrency level of 20 (`500 requests, 20 concurrent workers`).
+- **Target Endpoint:** `show-results-app` at `http://show-results-app:8081/api/stats` with authenticated `Authorization: Bearer <jwt>`.
+- **Metrics Collected:** Throughput (requests/sec), Average Latency (ms), 95th Percentile Latency (ms), HTTP Error Rate, and Container Resource Usage via `docker stats`.
+
+### 6.3 Justified Improvements
+
+1. **Improvement 1: In-Memory TTL Caching (`CACHE_TTL_MS=5000`)**
+   - *Baseline:* `CACHE_TTL_MS=0`. Every API request executes a round-trip database query to MongoDB (`collection.find().sort().toArray()`).
+   - *Justification:* The `analytics-service` only polls and recalculates route statistics once every 15 seconds (`POLL_SECONDS: 15`). Querying MongoDB on every millisecond for data that changes only every 15 seconds wastes database I/O and CPU.
+   - *Result:* Setting `CACHE_TTL_MS=5000` caches results in Node.js memory for 5 seconds and deduplicates in-flight requests, cutting average latency and eliminating repetitive MongoDB queries.
+
+2. **Improvement 2: CPU Limit Optimization (`0.5 CPU` → `1.0 CPU` on `show-results-app` and `auth-service`)**
+   - *Baseline:* Containers throttled at `cpus: "0.5"`.
+   - *Justification:* Under high concurrency (20 simultaneous connections), Node.js event-loop scheduling and JSON serialization were throttled by Linux Completely Fair Scheduler (CFS) quotas.
+   - *Result:* Raising the CPU limit to `1.0` eliminated CPU quota throttling spikes, reducing $p95$ tail latency by more than 62% and doubling throughput.
+
+### 6.4 Results & Comparison
+
+| Test Configuration | Total Time (s) | Throughput (req/s) | Avg Latency (ms) | p95 Latency (ms) | Errors | Status Codes |
+| --- | --- | --- | --- | --- | --- |
+| **1. Baseline** (No Cache, 0.5 CPU) | 4.75 s | **105.33 req/s** | 188.26 ms | 369 ms | 0 (0.0%) | 200: 500 |
+| **2. Improvement 1** (5s In-Memory Cache) | 3.92 s | **127.65 req/s** | 154.96 ms | 514 ms | 0 (0.0%) | 200: 500 |
+| **3. Improvement 2** (5s Cache + 1.0 CPU) | 1.92 s | **260.01 req/s** | **76.02 ms** | **193 ms** | 0 (0.0%) | 200: 500 |
+
+*Summary: Combining in-memory caching with appropriate CPU allocation increased system throughput by **+146.8%** (from 105 to 260 req/s) and reduced average response latency by **59.6%** (from 188 ms down to 76 ms).*
+
+![docker stats during load test](evidence/06-docker-stats.png)
+![load test comparison](evidence/06-loadtest-results.png)
+
+### 6.5 Observability & Structured Logging
+
+All services emit structured JSON logs to `stdout` with millisecond request timing:
+- Request latencies are captured at the middleware level (`process.hrtime.bigint()`).
+- Secrets (passwords, JWT secrets, database connection strings) are sanitized and never logged.
+
+Example structured log entry from `show-results-app`:
+```json
+{"ts":"2026-10-23T14:16:53.635Z","level":"info","service":"show-results-app","msg":"request","method":"GET","path":"/api/stats","status":200,"duration_ms":12.5}
+```
+
+![Structured logs example](evidence/06-structured-logs.png)
+
 ## 7. CI/CD Evidence

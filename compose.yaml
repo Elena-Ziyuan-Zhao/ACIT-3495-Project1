@@ -65,7 +65,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 128m }
+        limits: { cpus: "1.0", memory: 256m }
 
   # ===== enter-data-app (owner: Elena) =====
   post:
@@ -116,7 +116,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 128m }
+        limits: { cpus: "1.0", memory: 256m }
 
   # ===== analytics-service (owner: Taranjot Singh) =====
   analytics:
